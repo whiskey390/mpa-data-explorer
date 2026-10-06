@@ -1,1 +1,150 @@
-<!doctype html><title>MPA Data Explorer</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MPA Data Explorer</title>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<style>
+  :root { --bg:#f6f8fa; --card:#fff; --ink:#1f2933; --mute:#667; --line:#d8dee4; --accent:#0b6e99; --warn:#b45309; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui,sans-serif; color:var(--ink); background:var(--bg); height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; flex-wrap:wrap; gap:12px 20px; align-items:center; padding:10px 16px; background:var(--card); border-bottom:1px solid var(--line); }
+  h1 { font-size:18px; margin:0; }
+  header select, header a.btn { font:inherit; padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:#fff; }
+  header select { min-width:260px; max-width:100%; }
+  a.btn { color:var(--accent); text-decoration:none; }
+  a.btn.off { pointer-events:none; color:#999; }
+  main { flex:1; display:grid; grid-template-columns:1fr 380px; min-height:0; }
+  #map { min-height:300px; }
+  aside { overflow:auto; padding:16px; display:flex; flex-direction:column; gap:20px; background:var(--bg); border-left:1px solid var(--line); }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--mute); margin:0 0 8px; display:flex; justify-content:space-between; align-items:center; }
+  table { width:100%; border-collapse:collapse; }
+  td { padding:3px 0; vertical-align:middle; }
+  td.n { text-align:right; font-variant-numeric:tabular-nums; padding-left:8px; white-space:nowrap; }
+  td.l { word-break:break-word; width:42%; }
+  td.b { width:38%; }
+  .bar { height:8px; background:var(--accent); border-radius:2px; min-width:1px; }
+  tr.gap td { color:var(--warn); }
+  .scroll { max-height:240px; overflow:auto; }
+  .kpi { display:flex; gap:16px; flex-wrap:wrap; }
+  .kpi b { display:block; font-size:20px; }
+  .note { color:var(--warn); margin:8px 0 0; }
+  .mute { color:var(--mute); }
+  #status { padding:8px 16px; color:var(--mute); }
+  select.mini { font:inherit; font-size:12px; }
+  @media (max-width: 800px) {
+    body { height:auto; }
+    main { grid-template-columns:1fr; }
+    #map { height:60vh; }
+    aside { border-left:0; border-top:1px solid var(--line); overflow:visible; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>MPA Data Explorer</h1>
+  <label>Protected area <select id="area"><option>Loading…</option></select></label>
+  <a id="csv" class="btn off" href="#" download>Download CSV</a>
+  <span id="country" class="mute"></span>
+</header>
+<div id="status"></div>
+<main>
+  <div id="map"></div>
+  <aside id="panel">
+    <section><h2>Summary</h2><div id="summary" class="mute">Choose a protected area.</div></section>
+    <section><h2>Records per year</h2><div id="years" class="scroll"></div></section>
+    <section><h2><span>Records per higher taxon</span>
+      <select id="rank" class="mini"><option value="by_phylum">Phylum</option><option value="by_class">Class</option></select></h2>
+      <div id="taxa" class="scroll"></div></section>
+    <section><h2>By OBIS node</h2><div id="nodes" class="scroll"></div></section>
+    <section><h2>By publishing institution</h2><div id="inst" class="scroll"></div></section>
+  </aside>
+</main>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const fmt = n => n.toLocaleString("en");
+const canvas = L.canvas({ padding: 0.5 });
+const base = {
+  "OpenStreetMap": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap contributors" }),
+  "CARTO light": L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap contributors © CARTO" }),
+  "OpenTopoMap": L.tileLayer("https://tile.opentopomap.org/{z}/{x}/{y}.png", { maxZoom: 17, attribution: "© OpenStreetMap contributors, SRTM | © OpenTopoMap (CC-BY-SA)" }),
+  "Esri imagery": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 18, attribution: "Tiles © Esri" }),
+};
+const map = L.map("map", { layers: [base["OpenStreetMap"]], preferCanvas: true }).setView([39.5, -9], 6);
+L.control.layers(base, null, { collapsed: false }).addTo(map);
+let layer = null, stats = null;
+
+function table(el, rows, opts = {}) {
+  const max = Math.max(1, ...rows.map(r => r[1]));
+  const t = document.createElement("table");
+  for (const [label, n] of rows) {
+    const tr = t.insertRow();
+    if (opts.gaps && n === 0) tr.className = "gap";
+    tr.insertCell().textContent = label;
+    tr.cells[0].className = "l";
+    const b = tr.insertCell(); b.className = "b"; const d = document.createElement("div");
+    d.className = "bar"; d.style.width = (100 * n / max) + "%"; b.appendChild(d);
+    const c = tr.insertCell(); c.className = "n"; c.textContent = fmt(n);
+  }
+  el.replaceChildren(rows.length ? t : Object.assign(document.createElement("span"), { className: "mute", textContent: "No records." }));
+}
+
+function render() {
+  if (!stats) return;
+  table($("years"), stats.by_year, { gaps: true });
+  table($("taxa"), stats[$("rank").value]);
+}
+
+function summary(d) {
+  const s = d.stats, own = s.own_node;
+  const el = $("summary"); el.className = ""; el.replaceChildren();
+  const k = document.createElement("div"); k.className = "kpi";
+  for (const [v, l] of [[fmt(s.records), "records"], [fmt(s.species), "taxa names"], [(own.share * 100).toFixed(1) + "%", `from node matching “${own.match}”`]]) {
+    const x = document.createElement("div"); const b = document.createElement("b"); b.textContent = v;
+    x.append(b, l); k.appendChild(x);
+  }
+  el.appendChild(k);
+  const add = (txt, cls) => { const p = document.createElement("p"); p.className = cls; p.textContent = txt; el.appendChild(p); };
+  if (d.truncated) add(`Showing ${fmt(s.records)} of about ${fmt(d.total)} records (cap reached). Counts describe the shown subset.`, "note");
+  if (s.no_date) add(`${fmt(s.no_date)} records have no year.`, "mute");
+  add("Zero-record years inside the range are highlighted in orange.", "mute");
+}
+
+async function load(code) {
+  $("csv").className = "btn off";
+  $("status").textContent = "Fetching boundary and OBIS records… large areas can take a minute.";
+  try {
+    const r = await fetch(`api/areas/${encodeURIComponent(code)}/data`);
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    const d = await r.json();
+    if (layer) layer.remove();
+    const g = L.geoJSON(d.boundary, { style: { color: "#c2410c", weight: 2, fillOpacity: 0.05 } });
+    const pts = d.rows.map(p => L.circleMarker([p.lat, p.lon], { renderer: canvas, radius: 3, weight: 0, fillColor: "#0b6e99", fillOpacity: .6 })
+      .bindPopup(() => { const div = document.createElement("div"); div.textContent = `${p.name || "?"} · ${p.year || "no year"} · ${p.institution}`; return div; }));
+    layer = L.featureGroup([g, ...pts]).addTo(map);
+    map.fitBounds(g.getBounds(), { padding: [20, 20] });
+    stats = d.stats;
+    summary(d);
+    table($("nodes"), stats.by_node); table($("inst"), stats.by_institution);
+    render();
+    $("csv").href = `api/areas/${encodeURIComponent(code)}/records.csv`; $("csv").className = "btn";
+    $("status").textContent = "";
+  } catch (e) { $("status").textContent = "Could not load this area: " + e.message; }
+}
+
+(async () => {
+  try {
+    const [cfg, areas] = await Promise.all([fetch("api/config").then(r => r.json()), fetch("api/areas").then(r => r.json())]);
+    $("country").textContent = cfg.country + " · max " + fmt(cfg.max_records) + " records per area";
+    const sel = $("area"); sel.replaceChildren(new Option("Select…", ""));
+    for (const a of areas) sel.add(new Option(`${a.name} (${a.code})`, a.code));
+    sel.onchange = () => sel.value && load(sel.value);
+  } catch (e) { $("status").textContent = "Could not load the protected-area list: " + e.message; }
+})();
+$("rank").onchange = render;
+</script>
+</body>
+</html>
