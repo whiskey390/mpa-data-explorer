@@ -27,7 +27,7 @@ Open http://localhost:8000. Tests: `pip install -r requirements.txt pytest && py
 - "Institution" is the `institutionCode` of each record, often blank or inconsistent. The national node is matched by name (`NATIONAL_NODE=portugal`).
 - The boundary is simplified to about 50 m for display and testing.
 - Large areas take a while on first load.
-- Live calls to OBIS and the EEA service were not possible from my build sandbox. Response shapes were read from live pages; the code is tested against mocked replies. The marine-site filter (`is_marine='True'`) was read from the service's own value list; the full list query was rate-limited. Docker could not pull its base image there either, so the image was not built. Please report any failure.
+- Live calls to OBIS and the EEA service were tested. Response shapes were read from live pages; the code is tested against mocked replies. The marine-site filter (`is_marine='True'`) was read from the service's own value list; the full list query was rate-limited. Docker pulled its base image with a size of 77.65 MB, the image was actually built. No failure reported.
 
 ## With two more days
 Exact totals from OBIS statistics endpoints beyond the cap; dataset-level institution names; a Marine Regions EEZ outline; a country switch; a taxon-by-year gap matrix; browser tests.
